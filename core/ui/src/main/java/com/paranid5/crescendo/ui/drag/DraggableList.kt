@@ -1,27 +1,45 @@
 package com.paranid5.crescendo.ui.drag
 
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.NonRestartableComposable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.zIndex
 import arrow.core.curried
+import arrow.core.raise.nullable
+import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.colors
 import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.dimensions
 import kotlinx.collections.immutable.ImmutableList
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+private const val ZeroOffset = 0F
+private const val UpSpeedUp = 2F
+private const val DownSpeedUp = 3F
+private const val DragEventTimeout = 500L
 
 typealias DraggableListItemContent<T> = @Composable (
     items: ImmutableList<T>,
@@ -30,7 +48,6 @@ typealias DraggableListItemContent<T> = @Composable (
     modifier: Modifier,
 ) -> Unit
 
-@NonRestartableComposable
 @Composable
 fun <T> DraggableList(
     items: ImmutableList<T>,
@@ -40,7 +57,6 @@ fun <T> DraggableList(
     modifier: Modifier = Modifier,
     itemModifier: Modifier = Modifier,
     scrollingState: LazyListState = rememberLazyListState(),
-    bottomPadding: Dp = dimensions.padding.extraMedium,
     key: ((index: Int, item: T) -> Any)? = null,
     itemContent: DraggableListItemContent<T>,
 ) {
@@ -50,11 +66,11 @@ fun <T> DraggableList(
 
     val draggableItems by draggableItemsState
 
-    val currentTrackIndexAfterDragState = remember(currentItemIndex) {
+    val currentItemIndexAfterDragState = remember(currentItemIndex) {
         mutableIntStateOf(currentItemIndex)
     }
 
-    val currentTrackIndexAfterDrag by currentTrackIndexAfterDragState
+    val currentItemIndexAfterDrag by currentItemIndexAfterDragState
 
     val positionState = remember { mutableStateOf<Float?>(null) }
     val position by positionState
@@ -68,7 +84,7 @@ fun <T> DraggableList(
     val indexWithOffset by rememberItemIndexWithOffset(
         position = position,
         scrollingState = scrollingState,
-        draggedItemIndex = draggedItemIndex
+        draggedItemIndex = draggedItemIndex,
     )
 
     DraggingEffect(
@@ -76,18 +92,17 @@ fun <T> DraggableList(
         scrollingState = scrollingState,
         isDragging = isDragging,
         itemsState = draggableItemsState,
-        currentDragIndexState = currentTrackIndexAfterDragState,
+        currentDragIndexState = currentItemIndexAfterDragState,
         draggedItemIndexState = draggedItemIndexState,
     )
 
     DismissibleList(
         items = draggableItems,
         scrollingState = scrollingState,
-        bottomPadding = bottomPadding,
         onDismissed = onDismissed,
-        modifier = modifier.handleTracksMovement(
+        modifier = modifier.handleItemsMovement(
             items = draggableItems,
-            currentTrackIndexAfterDrag = currentTrackIndexAfterDrag,
+            currentItemIndexAfterDrag = currentItemIndexAfterDrag,
             scrollingState = scrollingState,
             positionState = positionState,
             isDraggingState = isDraggingState,
@@ -102,7 +117,7 @@ fun <T> DraggableList(
                 index = index,
                 indexWithOffset = indexWithOffset,
                 itemView = { itemList2, index2, itemMod2 ->
-                    itemContent(itemList2, index2, currentTrackIndexAfterDrag, itemMod2)
+                    itemContent(itemList2, index2, currentItemIndexAfterDrag, itemMod2)
                 },
                 modifier = draggableItemModifier then itemModifier
             )
@@ -124,27 +139,68 @@ private fun rememberItemIndexWithOffset(
 }
 
 @Composable
-private fun <T> Modifier.handleTracksMovement(
+private fun <T> Modifier.handleItemsMovement(
     items: ImmutableList<T>,
-    currentTrackIndexAfterDrag: Int,
+    currentItemIndexAfterDrag: Int,
     scrollingState: LazyListState,
     positionState: MutableState<Float?>,
     isDraggingState: MutableState<Boolean>,
     draggedItemIndexState: MutableState<Int?>,
-    onDragged: (draggedItems: ImmutableList<T>, currentTrackIndexAfterDrag: Int) -> Unit,
+    onDragged: (draggedItems: ImmutableList<T>, currentItemIndexAfterDrag: Int) -> Unit,
 ): Modifier {
     val draggedItems by rememberUpdatedState(items)
-    val curTrackIndexAfterDrag by rememberUpdatedState(currentTrackIndexAfterDrag)
+    val curTrackIndexAfterDrag by rememberUpdatedState(currentItemIndexAfterDrag)
 
     var position by positionState
     var isDragging by isDraggingState
     var draggedItemIndex by draggedItemIndexState
 
+    val coroutineScope = rememberCoroutineScope()
+    var itemOffset by remember { mutableStateOf(Offset.Zero) }
+    var itemOffsetHandled by remember { mutableStateOf(false) }
+    var overscrollJob by remember { mutableStateOf<Job?>(null) }
+
+    val dragEventTrigger by produceDragEventTrigger()
+
+    LaunchedEffect(isDragging, position, itemOffset, dragEventTrigger) {
+        val itemSize = firstVisibleItem(scrollingState, itemOffset)?.size ?: 0
+        val viewportHeight = scrollingState.layoutInfo.viewportSize.height.toFloat()
+
+        position = position?.plus(itemOffset.y)?.coerceIn(
+            minimumValue = ZeroOffset,
+            maximumValue = viewportHeight - itemSize,
+        )
+
+        if (isDragging && overscrollJob?.isActive != true) {
+            checkForOverscroll(
+                scrollingState = scrollingState,
+                offset = itemOffset,
+                dragItemPosition = position,
+            )?.let { overScrollOffset ->
+                overscrollJob = coroutineScope.launch {
+                    scrollingState.animateScrollBy(
+                        value = overScrollOffset,
+                        animationSpec = tween(easing = FastOutLinearInEasing),
+                    )
+                }
+            }
+        }
+
+        itemOffsetHandled = true
+    }
+
+    LaunchedEffect(itemOffsetHandled) {
+        if (itemOffsetHandled) {
+            itemOffset = Offset.Zero
+            itemOffsetHandled = false
+        }
+    }
+
     return this then Modifier.pointerInput(Unit) {
         detectDragGesturesAfterLongPress(
             onDrag = { change, offset ->
                 change.consume()
-                position = position?.plus(offset.y)
+                itemOffset = offset
             },
             onDragStart = { offset ->
                 isDragging = true
@@ -158,6 +214,7 @@ private fun <T> Modifier.handleTracksMovement(
                 isDragging = false
                 onDragged(draggedItems, curTrackIndexAfterDrag)
                 draggedItemIndex = null
+                overscrollJob?.cancel()
             },
         )
     }
@@ -169,7 +226,7 @@ private inline fun <T> DraggableItemList(
     index: Int,
     indexWithOffset: Pair<Int, Float>?,
     crossinline itemView: ListItemContent<T>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val offset by rememberItemOffset(indexWithOffset, index)
 
@@ -178,7 +235,13 @@ private inline fun <T> DraggableItemList(
         index,
         modifier
             .zIndex(offset?.let { 1F } ?: 0F)
-            .graphicsLayer { translationY = offset ?: 0F }
+            .graphicsLayer { translationY = offset ?: ZeroOffset }
+            .clip(RoundedCornerShape(dimensions.padding.extraMedium))
+            .background(
+                offset
+                    ?.let { colors.background.highContrast.copy(alpha = 0.5F) }
+                    ?: Color.Transparent
+            ),
     )
 }
 
@@ -190,19 +253,27 @@ private fun rememberItemOffset(indexWithOffset: Pair<Int, Float>?, index: Int) =
         }
     }
 
+@Composable
+private fun produceDragEventTrigger() = produceState(0L) {
+    while (true) {
+        delay(DragEventTimeout)
+        value = System.currentTimeMillis()
+    }
+}
+
 private fun itemIndexWithOffset(
     position: Float?,
     scrollingState: LazyListState,
-    draggedItemIndex: Int
-): Pair<Int, Float>? {
+    draggedItemIndex: Int,
+): Pair<Int, Float>? = nullable {
     val item = scrollingState
         .layoutInfo
         .visibleItemsInfo
         .getOrNull(draggedItemIndex - scrollingState.firstVisibleItemIndex)
-        ?: return null
+        .bind()
 
-    val offset = (position ?: 0F) - item.offset - item.size / 2F
-    return item.index to offset
+    val offset = (position ?: ZeroOffset) - item.offset - item.size / 2F
+    item.index to offset
 }
 
 private fun firstVisibleItem(scrollingState: LazyListState, offset: Offset) =
@@ -210,3 +281,29 @@ private fun firstVisibleItem(scrollingState: LazyListState, offset: Offset) =
         .layoutInfo
         .visibleItemsInfo
         .firstOrNull { offset.y.toInt() in it.offset..it.offset + it.size }
+
+private fun checkForOverscroll(
+    scrollingState: LazyListState,
+    offset: Offset,
+    dragItemPosition: Float?,
+    upSpeedUp: Float = UpSpeedUp,
+    downSpeedUp: Float = DownSpeedUp,
+): Float? = nullable {
+    val firstVisibleItem = firstVisibleItem(scrollingState, offset).bind()
+    val itemSize = firstVisibleItem.size
+
+    val startOffset = dragItemPosition.bind()
+    val endOffset = firstVisibleItem.offsetEnd + startOffset
+
+    when {
+        startOffset > ZeroOffset ->
+            (endOffset - scrollingState.layoutInfo.viewportEndOffset + itemSize)
+                .takeIf { diff -> diff > ZeroOffset }
+                ?.let { it * downSpeedUp }
+
+        else ->
+            (startOffset - scrollingState.layoutInfo.viewportStartOffset - itemSize)
+                .takeIf { diff -> diff < ZeroOffset }
+                ?.let { it * upSpeedUp }
+    }
+}

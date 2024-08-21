@@ -1,6 +1,7 @@
 package com.paranid5.crescendo.presentation.main
 
 import android.content.res.Configuration
+import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -18,28 +19,35 @@ import androidx.compose.material.ModalBottomSheetState
 import androidx.compose.material.ModalBottomSheetValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.paranid5.crescendo.core.common.AudioStatus
+import arrow.core.raise.nullable
+import com.paranid5.crescendo.core.common.PlaybackStatus
 import com.paranid5.crescendo.core.common.navigation.LocalNavigator
+import com.paranid5.crescendo.core.resources.R
 import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.colors
 import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.dimensions
 import com.paranid5.crescendo.feature.current_playlist.presentation.CurrentPlaylistScreen
-import com.paranid5.crescendo.feature.current_playlist.view_model.CurrentPlaylistBackResult
+import com.paranid5.crescendo.feature.current_playlist.view_model.CurrentPlaylistScreenEffect
+import com.paranid5.crescendo.feature.playing.presentation.PlayingScreen
+import com.paranid5.crescendo.feature.playing.view_model.PlayingScreenEffect
 import com.paranid5.crescendo.navigation.AppScreen
 import com.paranid5.crescendo.navigation.requireAppNavigator
-import com.paranid5.crescendo.playing.presentation.PlayingScreen
 import com.paranid5.crescendo.presentation.main.appbar.AppBar
 import com.paranid5.crescendo.ui.appbar.appBarHeight
 import com.paranid5.crescendo.ui.composition_locals.LocalCurrentPlaylistSheetState
 import com.paranid5.crescendo.ui.composition_locals.playing.LocalPlayingPagerState
 import com.paranid5.crescendo.ui.composition_locals.playing.LocalPlayingSheetState
 import com.paranid5.crescendo.ui.utils.PushUpButton
+import com.paranid5.crescendo.utils.doNothing
+import kotlinx.coroutines.launch
 
 private const val ContentCollapsedPadding = 8F
 private const val ContentExpandedPadding = 24F
@@ -51,73 +59,94 @@ private const val PushUpExpandedPadding = 32F
 internal fun PlayingBottomSheet(
     alpha: Float,
     modifier: Modifier = Modifier,
-) {
-    val curPlaylistSheetState = LocalCurrentPlaylistSheetState.current
-    val playingPagerState = LocalPlayingPagerState.current
+) = nullable {
+    val context = LocalContext.current
+    val navigator = LocalNavigator.requireAppNavigator()
+    val curPlaylistSheetState = LocalCurrentPlaylistSheetState.current.bind()
+    val playingPagerState = LocalPlayingPagerState.current.bind()
 
-    val playingSheetState = LocalPlayingSheetState.current
-    val sheetState = playingSheetState?.bottomSheetState
-    val targetValue = sheetState?.targetValue
-    val currentValue = sheetState?.currentValue
+    val playingSheetState = LocalPlayingSheetState.current.bind()
+    val sheetState = playingSheetState.bottomSheetState
+    val targetValue = sheetState.targetValue
+    val currentValue = sheetState.currentValue
     val isBarNotVisible = currentValue == BottomSheetValue.Expanded
             && targetValue == BottomSheetValue.Expanded
 
-    curPlaylistSheetState?.let { curPlaylistScaffoldState ->
-        ModalBottomSheetLayout(
-            modifier = modifier,
-            sheetState = curPlaylistScaffoldState,
-            sheetContent = {
-                CurrentPlaylistBottomSheet(
-                    alpha = alpha,
-                    state = curPlaylistScaffoldState,
-                    modifier = Modifier.background(colors.background.gradient),
-                )
-            },
-            sheetBackgroundColor = Color.Transparent,
-            sheetShape = RoundedCornerShape(
-                topStart = dimensions.corners.extraMedium,
-                topEnd = dimensions.corners.extraMedium,
+    val coroutineScope = rememberCoroutineScope()
+
+    fun onScreenEffect(result: PlayingScreenEffect) = when (result) {
+        is PlayingScreenEffect.ShowAudioEffects -> {
+            coroutineScope.launch { playingSheetState.bottomSheetState.collapse() }
+            navigator.pushIfNotSame(AppScreen.Audio.AudioEffects)
+        }
+
+        is PlayingScreenEffect.ShowTrimmer ->
+            navigator.pushIfNotSame(AppScreen.Audio.Trimmer(result.trackUri))
+
+        is PlayingScreenEffect.ShowAudioEffectsNotAllowed ->
+            Toast
+                .makeText(context, R.string.audio_effects_init_error, Toast.LENGTH_LONG)
+                .show()
+
+        is PlayingScreenEffect.ShowMetaEditor -> doNothing() // TODO: show meta editor
+    }
+
+    ModalBottomSheetLayout(
+        modifier = modifier,
+        sheetState = curPlaylistSheetState,
+        sheetContent = {
+            CurrentPlaylistBottomSheet(
+                alpha = alpha,
+                state = curPlaylistSheetState,
+                modifier = Modifier.background(colors.background.gradient),
             )
-        ) {
-            Box(Modifier.fillMaxWidth()) {
-                HorizontalPager(state = playingPagerState!!) { page ->
-                    when (page) {
-                        0 -> PlayingScreen(
-                            coverAlpha = 1 - alpha,
-                            audioStatus = AudioStatus.PLAYING,
-                            modifier = modifier.fillMaxSize(),
-                        )
-
-                        else -> PlayingScreen(
-                            coverAlpha = 1 - alpha,
-                            audioStatus = AudioStatus.STREAMING,
-                            modifier = modifier.fillMaxSize(),
-                        )
-                    }
-                }
-
-                if (isBarNotVisible.not())
-                    AppBar(
-                        Modifier
-                            .clip(
-                                RoundedCornerShape(
-                                    topStart = dimensions.corners.extraMedium,
-                                    topEnd = dimensions.corners.extraMedium,
-                                )
-                            )
-                            .fillMaxWidth()
-                            .heightIn(min = appBarHeight)
-                            .align(Alignment.TopCenter)
-                            .alpha(alpha),
+        },
+        sheetBackgroundColor = Color.Transparent,
+        sheetShape = RoundedCornerShape(
+            topStart = dimensions.corners.extraMedium,
+            topEnd = dimensions.corners.extraMedium,
+        )
+    ) {
+        Box(Modifier.fillMaxWidth()) {
+            HorizontalPager(state = playingPagerState) { page ->
+                when (page) {
+                    0 -> PlayingScreen(
+                        coverAlpha = 1 - alpha,
+                        screenPlaybackStatus = PlaybackStatus.PLAYING,
+                        modifier = modifier.fillMaxSize(),
+                        onScreenEffect = ::onScreenEffect,
                     )
 
-                PushUpButton(
-                    alpha = alpha,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = pushUpTopPadding),
-                )
+                    else -> PlayingScreen(
+                        coverAlpha = 1 - alpha,
+                        screenPlaybackStatus = PlaybackStatus.STREAMING,
+                        modifier = modifier.fillMaxSize(),
+                        onScreenEffect = ::onScreenEffect,
+                    )
+                }
             }
+
+            if (isBarNotVisible.not())
+                AppBar(
+                    Modifier
+                        .clip(
+                            RoundedCornerShape(
+                                topStart = dimensions.corners.extraMedium,
+                                topEnd = dimensions.corners.extraMedium,
+                            )
+                        )
+                        .fillMaxWidth()
+                        .heightIn(min = appBarHeight)
+                        .align(Alignment.TopCenter)
+                        .alpha(alpha),
+                )
+
+            PushUpButton(
+                alpha = alpha,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = pushUpTopPadding),
+            )
         }
     }
 }
@@ -147,8 +176,11 @@ private fun CurrentPlaylistBottomSheet(
                 .padding(top = contentTopPadding),
         ) { result ->
             when (result) {
-                is CurrentPlaylistBackResult.ShowTrimmer ->
+                is CurrentPlaylistScreenEffect.ShowTrimmer ->
                     navigator.pushIfNotSame(AppScreen.Audio.Trimmer(result.trackUri))
+
+                is CurrentPlaylistScreenEffect.ShowMetaEditor ->
+                    doNothing // TODO: show meta editor
             }
         }
     }

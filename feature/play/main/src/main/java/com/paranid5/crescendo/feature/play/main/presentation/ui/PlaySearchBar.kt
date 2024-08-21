@@ -1,7 +1,10 @@
 package com.paranid5.crescendo.feature.play.main.presentation.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,10 +27,10 @@ import com.paranid5.crescendo.core.resources.ui.theme.AppTextSelectionColors
 import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.colors
 import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.dimensions
 import com.paranid5.crescendo.core.resources.ui.theme.AppTheme.typography
-import com.paranid5.crescendo.feature.play.main.presentation.view_model.PlayState
-import com.paranid5.crescendo.feature.play.main.presentation.view_model.PlayUiIntent
+import com.paranid5.crescendo.feature.play.main.presentation.effect.SearchBarFocusEffect
+import com.paranid5.crescendo.feature.play.main.view_model.PlayState
+import com.paranid5.crescendo.feature.play.main.view_model.PlayUiIntent
 import com.paranid5.crescendo.ui.utils.clickableWithRipple
-import com.paranid5.crescendo.utils.takeIfTrueOrNull
 
 private val IconSize = 24.dp
 
@@ -36,17 +39,23 @@ internal fun PlaySearchBar(
     state: PlayState,
     onUiIntent: (PlayUiIntent) -> Unit,
     modifier: Modifier = Modifier,
-) = Row(
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = modifier
-        .clip(RoundedCornerShape(dimensions.corners.small))
-        .background(Color.White),
 ) {
-    SearchTextField(
-        state = state,
-        onUiIntent = onUiIntent,
-        modifier = modifier,
-    )
+    SearchBarFocusEffect(state)
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(dimensions.corners.small))
+            .background(colors.background.searchBar),
+    ) {
+        SearchTextField(
+            state = state,
+            onUiIntent = onUiIntent,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = dimensions.padding.small),
+        )
+    }
 }
 
 @Composable
@@ -61,8 +70,8 @@ private fun SearchTextField(
     singleLine = true,
     textStyle = typography.body,
     colors = TextFieldDefaults.colors(
-        focusedTextColor = colors.text.dark,
-        unfocusedTextColor = colors.text.dark,
+        focusedTextColor = colors.text.onSearchBar,
+        unfocusedTextColor = colors.text.onSearchBar,
         disabledTextColor = colors.text.tertiriary,
         errorTextColor = colors.error,
         focusedContainerColor = Color.Transparent,
@@ -77,8 +86,10 @@ private fun SearchTextField(
     ),
     leadingIcon = { SearchIcon() },
     placeholder = { Placeholder() },
-    trailingIcon = state.isSearchActive.takeIfTrueOrNull {
-        { CancelIcon { onUiIntent(PlayUiIntent.ClearSearchQuery) } }
+    trailingIcon = {
+        AnimatedVisibility(visible = state.isSearchActive) {
+            CancelIcon { onUiIntent(PlayUiIntent.SearchCancelClick) }
+        }
     },
 )
 
@@ -87,7 +98,7 @@ private fun SearchIcon(modifier: Modifier = Modifier) =
     Icon(
         imageVector = Icons.Default.Search,
         contentDescription = null,
-        tint = colors.icon.primary,
+        tint = colors.icon.onSearchBar,
         modifier = modifier.size(IconSize),
     )
 
@@ -109,7 +120,7 @@ private fun CancelIcon(
 ) = Icon(
     imageVector = Icons.Default.Close,
     contentDescription = null,
-    tint = colors.icon.primary,
+    tint = colors.icon.onSearchBar,
     modifier = modifier
         .size(IconSize)
         .clickableWithRipple(onClick = onClick),

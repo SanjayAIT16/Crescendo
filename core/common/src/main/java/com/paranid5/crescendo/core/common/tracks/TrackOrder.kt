@@ -1,9 +1,14 @@
 package com.paranid5.crescendo.core.common.tracks
 
-import kotlinx.collections.immutable.ImmutableList
-import kotlinx.collections.immutable.toImmutableList
+import android.os.Parcelable
+import kotlinx.parcelize.Parcelize
 
-data class TrackOrder(val contentOrder: TrackContentOrder, val orderType: TrackOrderType) {
+@Parcelize
+data class TrackOrder(
+    val contentOrder: TrackContentOrder,
+    val orderType: TrackOrderType,
+) : Parcelable {
+
     enum class TrackContentOrder {
         TITLE, ARTIST, ALBUM, DATE, NUMBER_IN_ALBUM
     }
@@ -33,8 +38,3 @@ infix fun <T : Track> Iterable<T>.sortedBy(trackOrder: TrackOrder) = when (track
         TrackOrder.TrackContentOrder.NUMBER_IN_ALBUM -> sortedByDescending(Track::numberInAlbum)
     }
 }
-
-infix fun <T : Track> ImmutableList<T>.sortedBy(trackOrder: TrackOrder) =
-    (this as Iterable<T>)
-        .sortedBy(trackOrder)
-        .toImmutableList()

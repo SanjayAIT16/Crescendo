@@ -47,6 +47,7 @@ android {
 dependencies {
     api(project(":core:common"))
     api(project(":core:utils"))
+    api(project(":core:media"))
     api(project(":core:resources"))
 
     api(project(":domain:audio_effects"))
@@ -57,6 +58,7 @@ dependencies {
     api(project(":domain:waveform"))
     api(project(":domain:web"))
     api(project(":domain:github"))
+    api(project(":domain:cover"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -75,4 +77,6 @@ dependencies {
 
     implementation(libs.sqldelight.android.driver)
     implementation(libs.sqldelight.coroutines.extensions)
+
+    implementation(libs.yt.url.extractor.kt)
 }
